@@ -13,3 +13,6 @@ __pycache__/
 
 /.quarto/
 **/*.quarto_ipynb
+
+# Personal notes
+STATUS.md
