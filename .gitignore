@@ -1,0 +1,15 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Quarto
+.quarto/
+*_files/
+/.jupyter_cache/
+
+# OS
+.DS_Store
+
+/.quarto/
+**/*.quarto_ipynb
