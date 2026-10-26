@@ -23,10 +23,10 @@ uv sync
 uv run quarto render template-exercicio-sarima.qmd
 ```
 
-The state is a Quarto parameter (default: São Paulo). To render another one:
+The state is a Quarto parameter (default: Minas Gerais). To render another one:
 
 ```bash
-uv run quarto render template-exercicio-sarima.qmd -P UF:"Minas Gerais"
+uv run quarto render template-exercicio-sarima.qmd -P UF:"Bahia"
 ```
 
 Names must match the dataset spelling, accents included; an invalid name stops the render and

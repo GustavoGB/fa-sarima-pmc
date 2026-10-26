@@ -38,7 +38,7 @@ uv run quarto render template-exercicio-sarima.qmd -P UF:"Minas Gerais"
 
 ```{python}
 #| tags: [parameters]
-UF = "São Paulo"
+UF = "Minas Gerais"
 ```
 
 ## Setup
