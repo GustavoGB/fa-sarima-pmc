@@ -1,39 +1,43 @@
-# SARIMA on Brazilian retail sales (PMC)
+# SARIMA no comércio varejista brasileiro (PMC)
 
-Exercise for **Financial Analytics** (PADS Insper, 2026.34): SARIMA modeling of IBGE's PMC
-expanded retail sales volume index for one state (UF), with a 24-month forecast.
+Exercício da disciplina **Financial Analytics** (PADS Insper, turma 2026.34): modelagem SARIMA
+do índice de volume de vendas do varejo ampliado da PMC (IBGE) para uma UF, com previsão de
+24 meses.
 
-**Report:** <https://gustavogb.github.io/fa-sarima-pmc/>
+**Relatório:** <https://gustavogb.github.io/fa-sarima-pmc/>
 
-## Contents
+**Autor:** Gustavo Gobetti Bertocco
 
-| File | What it is |
+## Conteúdo
+
+| Arquivo | O que é |
 |---|---|
-| `template-exercicio-sarima.qmd` | The analysis (Quarto + Python) |
-| `index.html` | Rendered report, served by GitHub Pages |
-| `data/raw/pmc_volume_uf.parquet` | Cached copy of the course dataset |
-| `pyproject.toml`, `uv.lock` | Python environment (uv) |
+| `template-exercicio-sarima.qmd` | A análise (Quarto + Python) |
+| `index.html` | Relatório renderizado, servido pelo GitHub Pages |
+| `data/raw/pmc_volume_uf.parquet` | Cópia em cache da base da disciplina |
+| `pyproject.toml`, `uv.lock` | Ambiente Python (uv) |
 
-## Reproduce
+## Como reproduzir
 
-Requires [uv](https://docs.astral.sh/uv/) and [Quarto](https://quarto.org).
+Requer [uv](https://docs.astral.sh/uv/) e [Quarto](https://quarto.org).
 
 ```bash
 uv sync
 uv run quarto render template-exercicio-sarima.qmd
 ```
 
-The state is a Quarto parameter (default: Minas Gerais). To render another one:
+A UF é um parâmetro do Quarto (padrão: Minas Gerais). Para gerar o relatório de outra:
 
 ```bash
 uv run quarto render template-exercicio-sarima.qmd -P UF:"Bahia"
 ```
 
-Names must match the dataset spelling, accents included; an invalid name stops the render and
-lists the valid ones.
+O nome precisa seguir a grafia da base, com acentos; um nome inválido interrompe a
+renderização e lista os valores válidos.
 
-## Stack
+## Ferramentas
 
-polars for data handling, statsforecast `AutoARIMA` for modeling, statsmodels for unit-root
-tests and diagnostics, seaborn/matplotlib with the colorblind-safe Okabe-Ito palette, and a
-Pandera schema that checks the series before modeling (no missing or duplicated months).
+polars para manipulação dos dados, `AutoARIMA` do statsforecast para a modelagem,
+statsmodels para os testes de raiz unitária e diagnósticos, seaborn/matplotlib com a paleta
+Okabe-Ito (segura para daltonismo) e um schema Pandera que valida a série antes da modelagem
+(sem meses faltando ou duplicados).
