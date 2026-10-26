@@ -26,8 +26,7 @@ A base é a **PMC** (Pesquisa Mensal do Comércio) do IBGE: índice de volume de
 **comércio varejista ampliado** (inclui veículos e materiais de construção), por Unidade da
 Federação, mensal desde janeiro de 2004, base 2022 = 100, **sem ajuste sazonal**.
 
-A análise segue o fluxo da disciplina (`aulas/fundamentos.qmd`, `aulas/arima.qmd`,
-`aulas/sarima-prophet.qmd`): olhar os dados, testar raiz unitária, identificar, ajustar o
+Etapas da análise: olhar os dados, testar raiz unitária, identificar, ajustar o
 `AutoARIMA(season_length=12)`, diagnosticar os resíduos e prever 24 meses à frente com
 intervalos de 80% e 95%.
 
@@ -45,6 +44,7 @@ UF = "Minas Gerais"
 ## Setup
 
 ```{python}
+from datetime import date
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -52,11 +52,11 @@ import numpy as np
 import pandera.polars as pa
 import polars as pl
 import seaborn as sns
-from IPython.display import Markdown
+from IPython.display import Markdown, display
 from scipy import stats
 from statsforecast import StatsForecast
 from statsforecast.arima import ndiffs, nsdiffs
-from statsforecast.models import AutoARIMA
+from statsforecast.models import ARIMA, AutoARIMA
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.seasonal import STL
@@ -219,8 +219,7 @@ plt.show()
 
 ### Decomposição (STL)
 
-A STL é a decomposição recomendada na disciplina (`aulas/fundamentos.qmd`). Com
-`robust=True`, choques pontuais como abril de 2020 ficam no resíduo em vez de distorcer o
+A STL estima tendência e sazonalidade por regressões locais (Loess). Com `robust=True`, choques pontuais como abril de 2020 ficam no resíduo em vez de distorcer o
 padrão sazonal.
 
 ```{python}
@@ -288,8 +287,7 @@ plt.show()
 
 ### ACF e PACF: série original e diferenças
 
-Primeiro a diferença sazonal, depois a regular (`aulas/arima.qmd`). Se a diferença regular
-vier primeiro, um ciclo sazonal forte pode ser confundido com tendência.
+Primeiro a diferença sazonal, depois a regular. Se a diferença regular vier primeiro, um ciclo sazonal forte pode ser confundido com tendência.
 
 ```{python}
 diffs = df_sf.select(
@@ -321,13 +319,11 @@ plt.show()
 ```
 
 As linhas verticais pontilhadas marcam os lags sazonais (12, 24, 36). Leia-os separadamente
-dos lags curtos 1 a 3: os lags curtos sugerem p e q, e os sazonais sugerem P e Q
-(`aulas/sarima-prophet.qmd`).
+dos lags curtos 1 a 3: os lags curtos sugerem p e q, e os sazonais sugerem P e Q.
 
 ## Testes de raiz unitária
 
-Os dois testes têm **hipóteses nulas opostas**, então são lidos em conjunto
-(`aulas/fundamentos.qmd`):
+Os dois testes têm **hipóteses nulas opostas**, então são lidos em conjunto:
 
 | ADF (H0: raiz unitária) | KPSS (H0: estacionária) | Conclusão |
 |---|---|---|
@@ -338,7 +334,7 @@ Os dois testes têm **hipóteses nulas opostas**, então são lidos em conjunto
 
 ```{python}
 def joint_verdict(adf_p: float, kpss_p: float, alpha: float = 0.05) -> str:
-    """Leitura conjunta de ADF e KPSS, como na tabela da disciplina."""
+    """Leitura conjunta de ADF e KPSS, conforme a tabela acima."""
     adf_rejects, kpss_rejects = adf_p < alpha, kpss_p < alpha
     if adf_rejects and not kpss_rejects:
         return "estacionária"
@@ -390,8 +386,8 @@ Markdown(
 ## Modelagem: AutoARIMA
 
 O `AutoARIMA(season_length=12)` escolhe D e d com os testes acima e depois busca p, q, P e Q
-passo a passo, ficando com o modelo de menor AICc. Ele é "uma ferramenta, não uma resposta"
-(`aulas/arima.qmd`): o diagnóstico dos resíduos abaixo decide se o modelo é confiável.
+passo a passo, ficando com o modelo de menor AICc. Ele é uma ferramenta, não uma resposta:
+o diagnóstico dos resíduos abaixo decide se o modelo é confiável.
 
 ```{python}
 sf = StatsForecast(models=[AutoARIMA(season_length=SEASON)], freq="1mo", n_jobs=1)
@@ -462,7 +458,7 @@ plt.show()
 
 O Ljung-Box testa se as primeiras *h* autocorrelações são conjuntamente zero. **H0 é ruído
 branco, então um p-valor alto é o resultado bom.** `model_df = p + q + P + Q` desconta os
-graus de liberdade usados pelos termos ARMA estimados (`aulas/arima.qmd`).
+graus de liberdade usados pelos termos ARMA estimados.
 
 ```{python}
 lb = acorr_ljungbox(resid, lags=[12, 24, 36], model_df=p + q + P + Q)
@@ -476,6 +472,68 @@ ljung_box = pl.from_pandas(lb.reset_index(names="lag")).with_columns(
 )
 jb_stat, jb_p = stats.jarque_bera(resid)
 ljung_box
+```
+
+### Comparação com o modelo airline
+
+A leitura manual da ACF de ΔΔ₁₂ (picos isolados nos lags 1 e 12) sugere o modelo airline,
+SARIMA(0,1,1)(0,1,1)₁₂. Como ele tem as mesmas diferenças (d = 1, D = 1) do modelo escolhido,
+os AICc são comparáveis: diferença menor que 2 é empate, entre 2 e 10 é evidência moderada,
+acima de 10 é decisiva.
+
+```{python}
+def fit_summary(data: pl.DataFrame, spec, label: str) -> tuple[dict, dict]:
+    """Ajusta um modelo; resume ordens, AICc e Ljung-Box dos resíduos."""
+    sf_ = StatsForecast(models=[spec], freq="1mo", n_jobs=1).fit(data)
+    fitted = sf_.fitted_[0, 0].model_
+    # maiúsculas = ordens sazonais, como na notação SARIMA
+    p_, q_, P_, Q_, s_, d_, D_ = fitted["arma"]  # noqa: N806
+    res = np.asarray(fitted["residuals"])[d_ + D_ * s_ :]
+    pvals = acorr_ljungbox(res, lags=[12, 24, 36], model_df=p_ + q_ + P_ + Q_)
+    summary = {
+        "modelo": label,
+        "ordens": f"({p_},{d_},{q_})({P_},{D_},{Q_})[{s_}]",
+        "parâmetros ARMA": p_ + q_ + P_ + Q_,
+        "AICc": round(fitted["aicc"], 1),
+        **{
+            f"LB p lag {h}": round(v, 3)
+            for h, v in zip((12, 24, 36), pvals["lb_pvalue"], strict=True)
+        },
+    }
+    return summary, fitted
+
+
+auto_summary, _ = fit_summary(df_sf, AutoARIMA(season_length=SEASON), "AutoARIMA")
+airline_summary, _ = fit_summary(
+    df_sf,
+    ARIMA(order=(0, 1, 1), seasonal_order=(0, 1, 1), season_length=SEASON),
+    "Airline",
+)
+pl.DataFrame([auto_summary, airline_summary])
+```
+
+### Sensibilidade ao choque de 2020
+
+Um único choque extremo entra em todas as autocorrelações calculadas sobre ele. Para separar
+um problema de estrutura do modelo de um choque não modelado, o AutoARIMA é reajustado com
+variáveis dummy (intervenção) para março a junho de 2020.
+
+```{python}
+SHOCK_MONTHS = [date(2020, m, 1) for m in (3, 4, 5, 6)]
+df_shock = df_sf.with_columns(
+    (pl.col("ds") == d_).cast(pl.Float64).alias(f"covid_{d_:%Y_%m}")
+    for d_ in SHOCK_MONTHS
+)
+shock_summary, shock_model = fit_summary(
+    df_shock, AutoARIMA(season_length=SEASON), "AutoARIMA + dummies 2020"
+)
+# o statsforecast nomeia os coeficientes das exógenas como ex_1, ex_2, ...
+shock_effects = ", ".join(
+    f"{month_pt(d_)}: {shock_model['coef'][f'ex_{i}']:+.1f}"
+    for i, d_ in enumerate(SHOCK_MONTHS, start=1)
+)
+display(pl.DataFrame([auto_summary, shock_summary]))
+Markdown(f"Efeito estimado das dummies (pontos do índice): {shock_effects}.")
 ```
 
 ## Previsão: 24 meses à frente
@@ -573,38 +631,10 @@ evidence = [
 Markdown("\n".join(evidence))
 ```
 
-### Respostas
+### Modelo e sazonalidade por UF
 
-*Escrever de 4 a 5 linhas para cada pergunta.*
-
-1. **O ACF/PACF da série original sugeriu sazonalidade? E tendência? Bate com o que você viu
-   no gráfico de linha?**
-
-   *Sua resposta aqui.*
-
-2. **Quantas diferenças (regular e sazonal) o AutoARIMA aplicou? E os componentes AR/MA?
-   Conseguiu observar isso no ACF/PACF?**
-
-   *Sua resposta aqui.*
-
-3. **Os resíduos parecem white noise? Algum padrão remanescente sazonal?**
-
-   *Sua resposta aqui.*
-
-4. **A previsão pareceu razoável visualmente (captura a sazonalidade, fica bem ancorada no
-   histórico, intervalos abrem muito com o horizonte)?**
-
-   *Sua resposta aqui.*
-
-5. **Que outras UFs você imagina que dariam um SARIMA bem diferente do seu (e por quê)? Pense
-   em estados de regiões diferentes, com perfil econômico distinto.**
-
-   *Sua resposta aqui.*
-
-::: {.callout-tip collapse="true"}
-## Confira sua intuição para a pergunta 5 (abrir depois de responder)
-
-O mesmo `AutoARIMA(season_length=12)` ajustado para todas as UFs.
+O mesmo `AutoARIMA(season_length=12)` ajustado para todas as UFs, com a força sazonal da STL
+e o tamanho do pico de dezembro (mediana do índice sem tendência, em pontos).
 
 ```{python}
 all_ufs = pmc.select(
@@ -618,14 +648,94 @@ sf_all.fit(all_ufs)
 rows = []
 for uid, fitted in zip(sf_all.uids, sf_all.fitted_[:, 0], strict=True):
     p_, q_, P_, Q_, s_, d_, D_ = fitted.model_["arma"]
+    uf_df = all_ufs.filter(pl.col("unique_id") == uid)
+    y_uf = uf_df["y"].to_numpy()
+    stl_uf = STL(y_uf, period=SEASON, robust=True).fit()
+    var_ru = np.var(stl_uf.resid)
+    seasonal_strength_uf = 1 - var_ru / np.var(stl_uf.seasonal + stl_uf.resid)
+    december = uf_df["ds"].dt.month().to_numpy() == 12
     rows.append(
         {
             "UF": uid,
             "modelo": f"({p_},{d_},{q_})({P_},{D_},{Q_})[{s_}]",
-            "AICc": round(fitted.model_["aicc"], 1),
+            "d": d_,
+            "força sazonal": round(seasonal_strength_uf, 2),
+            "pico de dez.": round(float(np.median((y_uf - stl_uf.trend)[december])), 1),
+            "crescimento": round(y_uf[-12:].mean() / y_uf[:12].mean(), 1),
+            "σ resíduos": round(float(np.sqrt(fitted.model_["sigma2"])), 1),
         }
     )
-pl.DataFrame(rows).with_columns((pl.col("UF") == UF).alias("minha UF"))
+pl.DataFrame(rows).sort("pico de dez.", descending=True).with_columns(
+    (pl.col("UF") == UF).alias("minha UF")
+)
 ```
 
-:::
+*Crescimento: média dos últimos 12 meses dividida pela média dos 12 primeiros (2004).*
+
+### Respostas
+
+1. **O ACF/PACF da série original sugeriu sazonalidade? E tendência? Bate com o que você viu
+   no gráfico de linha?**
+
+   Sim, as duas coisas. A ACF decai muito lentamente (0,89 no lag 1 e ainda cerca de 0,45 no
+   lag 36), a assinatura de uma série não estacionária, com tendência; a PACF, com um pico
+   dominante no lag 1 (0,89), reforça a raiz unitária. Sobre esse decaimento aparecem picos
+   nos lags 12 e 24 (0,83 e 0,64, acima dos vizinhos), e a PACF tem picos fortes nos lags 12
+   e 13: sazonalidade anual. Isso bate com o gráfico de linha, em que o índice quase dobra
+   entre 2004 e 2013 (de cerca de 52 para 96), recua na recessão de 2015–2016 e retoma
+   depois, com pico todo dezembro e vale em fevereiro (+14 e −10 pontos em relação à
+   tendência). A STL confirma: força da tendência 0,98 e sazonal 0,82.
+
+2. **Quantas diferenças (regular e sazonal) o AutoARIMA aplicou? E os componentes AR/MA?
+   Conseguiu observar isso no ACF/PACF?**
+
+   Uma de cada (d = 1, D = 1), coerente com os testes: na série original o ADF não rejeita e o
+   KPSS rejeita; após Δ₁₂ o resultado fica inconclusivo e a ACF ainda decai devagar até perto
+   do lag 23; só em ΔΔ₁₂ os dois testes concordam em estacionariedade, como indicam também
+   `nsdiffs` e `ndiffs`. Na ΔΔ₁₂, os picos negativos nos lags 1 (−0,39) e 12 (−0,37) sugerem,
+   pela leitura manual, o modelo airline SARIMA(0,1,1)(0,1,1)₁₂. O AutoARIMA escolheu um
+   modelo mais rico, SARIMA(3,1,2)(1,1,1)₁₂, que capta também a estrutura dos lags 2 a 4
+   (PACF significativa em 1 e 2, ACF em 3 e 4), menos óbvia no gráfico. A comparação justifica
+   a complexidade: o airline tem AICc 13 pontos pior (evidência decisiva) e deixa resíduos
+   autocorrelacionados (Ljung-Box p < 0,001). O MA sazonal de −0,88, próximo de −1, sugere uma
+   sazonalidade quase determinística.
+
+3. **Os resíduos parecem white noise? Algum padrão remanescente sazonal?**
+
+   Quase, mas não totalmente. Nenhum dos 36 lags da ACF dos resíduos sai da banda de ±0,12, e
+   os lags sazonais 12 e 24 são pequenos (0,03 e −0,07): não resta padrão sazonal. Ainda assim
+   o Ljung-Box rejeita ruído branco nos lags 12 e 24 (p = 0,035 e 0,040), porque testa a soma
+   de muitas autocorrelações pequenas. A análise de sensibilidade mostra a causa principal:
+   com dummies para março a junho de 2020, os p-valores sobem para 0,31, 0,07 e 0,13, e o
+   efeito estimado de abril é de cerca de −21 pontos. Ou seja, o problema é o choque da
+   pandemia, não a estrutura do modelo. A normalidade é rejeitada (caudas pesadas), o que
+   afeta os intervalos de previsão, não a previsão pontual.
+
+4. **A previsão pareceu razoável visualmente (captura a sazonalidade, fica bem ancorada no
+   histórico, intervalos abrem muito com o horizonte)?**
+
+   Sim, com ressalvas. A previsão reproduz a sazonalidade (picos de dezembro em cerca de 121 e
+   123, vales em fevereiro) e começa ancorada no histórico: a média dos 12 primeiros meses
+   previstos (106,8) fica perto da média dos últimos 12 observados (104,1). Mas ela projeta
+   crescimento contínuo só por inércia: o modelo não conhece juros, crédito ou renda. Os
+   intervalos de 95% abrem de 13 para 32 pontos em 24 meses, o esperado com d = 1 e D = 1,
+   em que a incerteza se acumula; no segundo ano a amplitude já supera a própria oscilação
+   sazonal (cerca de 24 pontos entre fevereiro e dezembro). Com resíduos de caudas pesadas,
+   esses intervalos tendem a ser otimistas; o próximo passo seria validar fora da amostra
+   (MASE contra o SeasonalNaive).
+
+5. **Que outras UFs você imagina que dariam um SARIMA bem diferente do seu (e por quê)? Pense
+   em estados de regiões diferentes, com perfil econômico distinto.**
+
+   A tabela por UF mostra que o mês do pico não muda: as 27 UFs têm pico em dezembro e vale
+   em fevereiro. O que muda é a intensidade e a dinâmica. Rio de Janeiro (+24), Bahia (+22),
+   Alagoas e Rio Grande do Norte (+21) têm o pico de Natal mais forte; Tocantins (+8),
+   Roraima (+9), Mato Grosso (+10) e Goiás (+12) têm o mais fraco. Minha hipótese é que, no
+   Centro-Norte, a renda do agronegócio e do setor público se distribui melhor ao longo do
+   ano, enquanto no litoral o 13º salário e o turismo de verão concentram o consumo em
+   dezembro. Na tendência, as 7 UFs que ficaram com d = 0 (entre elas Tocantins, Roraima e Mato
+   Grosso) cresceram mais em média (3,4× contra 2,6× desde 2004), já que a diferença sazonal
+   absorve uma tendência regular; mas não é regra: o Acre cresceu 5× e manteve d = 1. Já
+   economias pequenas e concentradas, como o Amapá (o maior σ dos resíduos, 6,2), geram
+   modelos mais instáveis. Minas, diversificada, fica no meio: pico moderado (+14) e um dos
+   menores ruídos (σ = 3,4).
