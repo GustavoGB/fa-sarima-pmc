@@ -1,8 +1,9 @@
 ---
-title: SARIMA on Brazilian retail sales (PMC)
-subtitle: Expanded retail sales volume index by state, IBGE, base 2022 = 100, not seasonally adjusted
-author: Gustavo Gobetti
+title: SARIMA no comércio varejista brasileiro (PMC)
+subtitle: Índice de volume de vendas do varejo ampliado por UF, IBGE, base 2022 = 100, sem ajuste sazonal
+author: Gustavo Gobetti Bertocco
 date: today
+lang: pt-BR
 format:
   html:
     output-file: index.html
@@ -19,21 +20,21 @@ execute:
   warning: false
 ---
 
-## About this report
+## Sobre o relatório
 
-The data is IBGE's **PMC** (*Pesquisa Mensal do Comércio*): the sales volume index of
-**expanded retail** (which includes vehicles and construction materials), by state (UF),
-monthly from January 2004, base 2022 = 100, **without seasonal adjustment**.
+A base é a **PMC** (Pesquisa Mensal do Comércio) do IBGE: índice de volume de vendas do
+**comércio varejista ampliado** (inclui veículos e materiais de construção), por Unidade da
+Federação, mensal desde janeiro de 2004, base 2022 = 100, **sem ajuste sazonal**.
 
-The analysis follows the course workflow (`aulas/fundamentos.qmd`, `aulas/arima.qmd`,
-`aulas/sarima-prophet.qmd`): look at the data, test for unit roots, identify, fit
-`AutoARIMA(season_length=12)`, check the residuals, and forecast 24 months ahead with
-80% and 95% intervals.
+A análise segue o fluxo da disciplina (`aulas/fundamentos.qmd`, `aulas/arima.qmd`,
+`aulas/sarima-prophet.qmd`): olhar os dados, testar raiz unitária, identificar, ajustar o
+`AutoARIMA(season_length=12)`, diagnosticar os resíduos e prever 24 meses à frente com
+intervalos de 80% e 95%.
 
-The state is a **parameter**. To render the report for another UF:
+A UF é um **parâmetro**. Para gerar o relatório de outra UF:
 
 ```bash
-uv run quarto render template-exercicio-sarima.qmd -P UF:"Minas Gerais"
+uv run quarto render template-exercicio-sarima.qmd -P UF:"Bahia"
 ```
 
 ```{python}
@@ -44,7 +45,6 @@ UF = "Minas Gerais"
 ## Setup
 
 ```{python}
-from datetime import date
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -62,11 +62,16 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.stattools import adfuller, kpss
 
-SEASON = 12  # monthly data
-HORIZON = 24  # months ahead
+SEASON = 12  # dados mensais
+HORIZON = 24  # meses à frente
 LEVELS = [80, 95]
+# o Python formata meses em inglês; nomes explícitos evitam depender do locale
+MONTHS_PT = [
+    "jan", "fev", "mar", "abr", "mai", "jun",
+    "jul", "ago", "set", "out", "nov", "dez",
+]  # fmt: skip
 
-# Okabe-Ito: colorblind-safe categorical palette
+# Okabe-Ito: paleta categórica segura para daltonismo
 OKABE_ITO = [
     "#E69F00",
     "#56B4E9",
@@ -80,17 +85,22 @@ BLUE, ORANGE, VERMILION, GREY = "#0072B2", "#E69F00", "#D55E00", "#6B6B6B"
 sns.set_theme(style="ticks", palette=OKABE_ITO)
 plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
 
-# Show whole tables, without polars' shape and dtype header rows
+# Tabelas completas, sem as linhas de shape e dtype do polars
 pl.Config.set_tbl_rows(-1)
 pl.Config.set_tbl_hide_dataframe_shape(True)
 pl.Config.set_tbl_hide_column_data_types(True)
 pl.Config.set_fmt_str_lengths(80)
 
 
+def month_pt(d) -> str:
+    """Data como 'abr/2020'."""
+    return f"{MONTHS_PT[d.month - 1]}/{d.year}"
+
+
 def correlogram(
     values: np.ndarray, ax: plt.Axes, kind: str = "acf", lags: int = 36
 ) -> None:
-    """ACF or PACF with a neutral significance band and the seasonal lags marked."""
+    """ACF ou PACF com banda de significância neutra e lags sazonais marcados."""
     plotter = plot_acf if kind == "acf" else plot_pacf
     extra = {} if kind == "acf" else {"method": "ywm"}
     plotter(
@@ -102,8 +112,8 @@ def correlogram(
         vlines_kwargs={"colors": BLUE},
         **extra,
     )
-    # statsmodels fills the band with the next palette color; grey keeps it
-    # from reading as data
+    # o statsmodels pinta a banda com a próxima cor da paleta; cinza evita que
+    # ela seja lida como dado
     for band in ax.collections[1:]:
         band.set_facecolor(GREY)
         band.set_alpha(0.15)
@@ -111,10 +121,11 @@ def correlogram(
         ax.axvline(lag, color=VERMILION, lw=0.6, ls=":")
 ```
 
-## Loading the PMC data
+## Carregando a base PMC
 
-The CSV is downloaded once and cached as Parquet in `data/raw/`, so the report re-renders the
-same way even if the GitHub release is unavailable. Parquet also keeps the `Date` type.
+O CSV é baixado uma vez e guardado em cache como Parquet em `data/raw/`, então o relatório é
+gerado da mesma forma mesmo se o release do GitHub estiver fora do ar. O Parquet também
+preserva o tipo `Date`.
 
 ```{python}
 DATA_URL = (
@@ -131,9 +142,9 @@ else:
 
 valid_ufs = pmc["uf"].unique().sort().to_list()
 if UF not in valid_ufs:
-    raise ValueError(f"UF {UF!r} is not in the data. Valid values: {valid_ufs}")
+    raise ValueError(f"UF {UF!r} não está na base. Valores válidos: {valid_ufs}")
 
-# Nixtla long format: unique_id, ds, y
+# formato longo da Nixtla: unique_id, ds, y
 df_sf = (
     pmc.filter(pl.col("uf") == UF)
     .select(
@@ -146,12 +157,12 @@ df_sf = (
 df_sf.head()
 ```
 
-Before modeling, a data-quality check: a missing or duplicated month would silently shift
-every seasonal lag, so it is better to fail loudly here.
+Antes de modelar, uma checagem de qualidade dos dados: um mês faltando ou duplicado
+deslocaria silenciosamente todos os lags sazonais, então é melhor o relatório falhar aqui.
 
 ```{python}
 class MonthlySeries(pa.DataFrameModel):
-    """One row per month: first-of-month dates, no gaps, no duplicates, finite y."""
+    """Uma linha por mês: datas no dia 1, sem lacunas, sem duplicatas, y finito."""
 
     unique_id: str
     ds: pl.Date = pa.Field(unique=True)
@@ -174,42 +185,43 @@ class MonthlySeries(pa.DataFrameModel):
 df_sf = MonthlySeries.validate(df_sf)
 first, last = df_sf["ds"].min(), df_sf["ds"].max()
 Markdown(
-    f"**State (UF): {UF}** · {df_sf.height} months, "
-    f"{first:%b %Y} to {last:%b %Y} · data checks passed."
+    f"**UF: {UF}** · {df_sf.height} meses, de {month_pt(first)} a {month_pt(last)} · "
+    "checagens de qualidade aprovadas."
 )
 ```
 
-## Descriptive analysis
+## Análise descritiva
 
-### The series
+### A série
 
-The 12-month centered moving average removes the seasonal cycle, which makes the trend easier
-to see. It is only for this picture: a centered window looks into the future, so it must never
-be used as a model feature.
+A média móvel centrada de 12 meses remove o ciclo sazonal e deixa a tendência mais visível.
+Ela serve só para este gráfico: uma janela centrada usa valores futuros, então nunca deve
+entrar como variável de um modelo.
 
 ```{python}
 plot_df = df_sf.with_columns(
     pl.col("y").rolling_mean(window_size=SEASON, center=True).alias("ma12")
 )
 fig, ax = plt.subplots()
-ax.plot(plot_df["ds"], plot_df["y"], color=BLUE, lw=1, label="Volume index")
+ax.plot(plot_df["ds"], plot_df["y"], color=BLUE, lw=1, label="Índice de volume")
 ax.plot(
-    plot_df["ds"], plot_df["ma12"], color=ORANGE, lw=2, label="12-month moving average"
+    plot_df["ds"], plot_df["ma12"], color=ORANGE, lw=2, label="Média móvel de 12 meses"
 )
 ax.axhline(100, color=GREY, lw=0.8, ls=":")
 ax.set(
-    title=f"Expanded retail sales volume, {UF}",
-    ylabel="Index (2022 = 100)",
+    title=f"Volume de vendas do varejo ampliado, {UF}",
+    ylabel="Índice (2022 = 100)",
     xlabel=None,
 )
 ax.legend(frameon=False)
 plt.show()
 ```
 
-### Decomposition (STL)
+### Decomposição (STL)
 
-STL is the course's recommended decomposition (`aulas/fundamentos.qmd`). `robust=True` keeps
-one-off shocks such as April 2020 in the remainder instead of distorting the seasonal pattern.
+A STL é a decomposição recomendada na disciplina (`aulas/fundamentos.qmd`). Com
+`robust=True`, choques pontuais como abril de 2020 ficam no resíduo em vez de distorcer o
+padrão sazonal.
 
 ```{python}
 y = df_sf["y"].to_numpy()
@@ -220,62 +232,64 @@ fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
 for ax, values, name in zip(
     axes,
     [y, stl.trend, stl.seasonal, stl.resid],
-    ["Observed", "Trend", "Seasonal", "Remainder"],
+    ["Observado", "Tendência", "Sazonal", "Resíduo"],
     strict=True,
 ):
     ax.plot(dates, values, color=BLUE, lw=1)
     ax.set_ylabel(name)
 axes[3].axhline(0, color=GREY, lw=0.8)
-fig.suptitle("STL decomposition (robust)")
+fig.suptitle("Decomposição STL (robusta)")
 plt.tight_layout()
 plt.show()
 
-# Strength of trend and seasonality (Wang, Smith & Hyndman 2006). AutoARIMA's
-# seasonal test applies a seasonal difference when seasonal strength > 0.64.
+# Força da tendência e da sazonalidade (Wang, Smith & Hyndman 2006). O teste
+# sazonal do AutoARIMA aplica uma diferença sazonal quando a força sazonal > 0,64.
 var_r = np.var(stl.resid)
 trend_strength = max(0.0, 1 - var_r / np.var(stl.trend + stl.resid))
 seasonal_strength = max(0.0, 1 - var_r / np.var(stl.seasonal + stl.resid))
 Markdown(
-    f"Trend strength: **{trend_strength:.2f}** · "
-    f"seasonal strength: **{seasonal_strength:.2f}** (threshold 0.64)."
+    f"Força da tendência: **{trend_strength:.2f}** · "
+    f"força da sazonalidade: **{seasonal_strength:.2f}** (limiar 0,64)."
 )
 ```
 
-### Seasonal pattern by month
+### Padrão sazonal por mês
 
-The boxplot shows which months are consistently above or below the trend, and how stable
-that effect is across years. It uses the **detrended** series (observed minus the STL trend):
-on raw levels, each box would mostly show the trend (the index roughly doubled over the
-sample), hiding the seasonal effect.
+O boxplot mostra quais meses ficam sistematicamente acima ou abaixo da tendência, e quão
+estável é esse efeito ao longo dos anos. Ele usa a série **sem tendência** (observado menos a
+tendência da STL): nos níveis brutos, cada caixa mostraria principalmente a tendência (o
+índice praticamente dobrou no período), escondendo o efeito sazonal.
 
 ```{python}
 by_month = df_sf.with_columns(
     (pl.col("y") - pl.Series(stl.trend)).alias("detrended"),
-    pl.col("ds").dt.strftime("%b").alias("month"),
+    pl.col("ds")
+    .dt.month()
+    .replace_strict(dict(enumerate(MONTHS_PT, start=1)), return_dtype=pl.String)
+    .alias("month"),
 )
-month_order = [f"{date(2000, m, 1):%b}" for m in range(1, 13)]
 fig, ax = plt.subplots()
 sns.boxplot(
     data=by_month.to_pandas(),
     x="month",
     y="detrended",
-    order=month_order,
+    order=MONTHS_PT,
     color=OKABE_ITO[1],
     ax=ax,
 )
 ax.axhline(0, color=GREY, lw=0.8)
 ax.set(
-    title="Seasonal effect: detrended index by calendar month",
+    title="Efeito sazonal: índice sem tendência por mês do ano",
     xlabel=None,
-    ylabel="Index points above / below trend",
+    ylabel="Pontos acima / abaixo da tendência",
 )
 plt.show()
 ```
 
-### ACF and PACF: original series and differences
+### ACF e PACF: série original e diferenças
 
-Seasonal difference first, then the regular difference (`aulas/arima.qmd`). If you take the
-regular difference first, a strong seasonal cycle can be mistaken for trend.
+Primeiro a diferença sazonal, depois a regular (`aulas/arima.qmd`). Se a diferença regular
+vier primeiro, um ciclo sazonal forte pode ser confundido com tendência.
 
 ```{python}
 diffs = df_sf.select(
@@ -285,15 +299,15 @@ diffs = df_sf.select(
 )
 series = {
     "Original": diffs["y"].to_numpy(),
-    "Seasonal difference (Δ₁₂)": diffs["y_d12"].drop_nulls().to_numpy(),
-    "Seasonal + regular difference (ΔΔ₁₂)": diffs["y_d1_d12"].drop_nulls().to_numpy(),
+    "Diferença sazonal (Δ₁₂)": diffs["y_d12"].drop_nulls().to_numpy(),
+    "Diferença sazonal + regular (ΔΔ₁₂)": diffs["y_d1_d12"].drop_nulls().to_numpy(),
 }
 
-# mathtext for the titles: the plot font has no Unicode subscript glyphs
+# mathtext nos títulos: a fonte dos gráficos não tem glifos de subscrito Unicode
 plot_titles = [
     "Original",
-    r"Seasonal difference ($\Delta_{12}$)",
-    r"Seasonal + regular difference ($\Delta\Delta_{12}$)",
+    r"Diferença sazonal ($\Delta_{12}$)",
+    r"Diferença sazonal + regular ($\Delta\Delta_{12}$)",
 ]
 
 fig, axes = plt.subplots(3, 3, figsize=(12, 9))
@@ -306,35 +320,35 @@ plt.tight_layout()
 plt.show()
 ```
 
-The dotted vertical lines mark the seasonal lags (12, 24, 36). Read them separately from the
-short lags 1 to 3: the short lags suggest p and q, and the seasonal lags suggest P and Q
+As linhas verticais pontilhadas marcam os lags sazonais (12, 24, 36). Leia-os separadamente
+dos lags curtos 1 a 3: os lags curtos sugerem p e q, e os sazonais sugerem P e Q
 (`aulas/sarima-prophet.qmd`).
 
-## Unit root tests
+## Testes de raiz unitária
 
-The two tests have **opposite null hypotheses**, so they are read together
+Os dois testes têm **hipóteses nulas opostas**, então são lidos em conjunto
 (`aulas/fundamentos.qmd`):
 
-| ADF (H0: unit root) | KPSS (H0: stationary) | Conclusion |
+| ADF (H0: raiz unitária) | KPSS (H0: estacionária) | Conclusão |
 |---|---|---|
-| rejects | does not reject | stationary |
-| does not reject | rejects | unit root: difference |
-| both reject | | inconclusive (possibly trend-stationary) |
-| neither rejects | | inconclusive |
+| rejeita | não rejeita | estacionária |
+| não rejeita | rejeita | raiz unitária: diferenciar |
+| ambos rejeitam | | inconclusivo (possivelmente estacionária em tendência) |
+| nenhum rejeita | | inconclusivo |
 
 ```{python}
 def joint_verdict(adf_p: float, kpss_p: float, alpha: float = 0.05) -> str:
-    """Joint reading of ADF and KPSS, as in the course table."""
+    """Leitura conjunta de ADF e KPSS, como na tabela da disciplina."""
     adf_rejects, kpss_rejects = adf_p < alpha, kpss_p < alpha
     if adf_rejects and not kpss_rejects:
-        return "stationary"
+        return "estacionária"
     if kpss_rejects and not adf_rejects:
-        return "unit root: difference"
-    return "inconclusive"
+        return "raiz unitária: diferenciar"
+    return "inconclusivo"
 
 
 def fmt_kpss_p(p: float) -> str:
-    """statsmodels truncates KPSS p-values to the [0.01, 0.10] table range."""
+    """O statsmodels trunca o p-valor do KPSS no intervalo da tabela [0,01; 0,10]."""
     if p <= 0.01:
         return "≤ 0.01"
     if p >= 0.10:
@@ -348,53 +362,53 @@ for name, values in series.items():
     kpss_stat, kpss_p, *_ = kpss(values, regression="c", nlags="auto")
     rows.append(
         {
-            "series": name,
-            "ADF stat": round(adf_stat, 2),
-            "ADF p-value": round(adf_p, 3),
-            "KPSS stat": round(kpss_stat, 2),
-            "KPSS p-value": fmt_kpss_p(kpss_p),
-            "joint reading (5%)": joint_verdict(adf_p, kpss_p),
+            "série": name,
+            "estat. ADF": round(adf_stat, 2),
+            "p-valor ADF": round(adf_p, 3),
+            "estat. KPSS": round(kpss_stat, 2),
+            "p-valor KPSS": fmt_kpss_p(kpss_p),
+            "leitura conjunta (5%)": joint_verdict(adf_p, kpss_p),
         }
     )
 pl.DataFrame(rows)
 ```
 
-`ndiffs` and `nsdiffs` estimate the number of differences automatically, using the same tests
-AutoARIMA uses internally: a seasonal-strength test for D, then KPSS on the seasonally
-differenced series for d.
+`ndiffs` e `nsdiffs` estimam o número de diferenças automaticamente, com os mesmos testes que
+o AutoARIMA usa internamente: um teste de força sazonal para D, depois o KPSS na série com
+diferença sazonal para d.
 
 ```{python}
 D_hat = nsdiffs(y, period=SEASON)
 y_seasonal = y[SEASON * D_hat :] - y[: len(y) - SEASON * D_hat] if D_hat else y
 d_hat = ndiffs(y_seasonal)
 Markdown(
-    f"`nsdiffs` → **D = {D_hat}** seasonal difference(s) · "
-    f"`ndiffs` → **d = {d_hat}** regular difference(s)."
+    f"`nsdiffs` → **D = {D_hat}** diferença(s) sazonal(is) · "
+    f"`ndiffs` → **d = {d_hat}** diferença(s) regular(es)."
 )
 ```
 
-## Modeling: AutoARIMA
+## Modelagem: AutoARIMA
 
-`AutoARIMA(season_length=12)` chooses D and d with the tests above, then searches over p, q, P
-and Q step by step, keeping the model with the lowest AICc. It is "a tool, not an answer"
-(`aulas/arima.qmd`), so the residual diagnostics below decide whether the model can be trusted.
+O `AutoARIMA(season_length=12)` escolhe D e d com os testes acima e depois busca p, q, P e Q
+passo a passo, ficando com o modelo de menor AICc. Ele é "uma ferramenta, não uma resposta"
+(`aulas/arima.qmd`): o diagnóstico dos resíduos abaixo decide se o modelo é confiável.
 
 ```{python}
 sf = StatsForecast(models=[AutoARIMA(season_length=SEASON)], freq="1mo", n_jobs=1)
 sf.fit(df_sf)
 model = sf.fitted_[0, 0].model_
 
-# statsforecast stores the orders as (p, q, P, Q, s, d, D)
+# o statsforecast guarda as ordens como (p, q, P, Q, s, d, D)
 p, q, P, Q, s, d, D = model["arma"]
 order_label = f"SARIMA({p},{d},{q})({P},{D},{Q})[{s}]"
 coefs = pl.DataFrame(
     {
-        "term": list(model["coef"]),
-        "estimate": [round(v, 4) for v in model["coef"].values()],
+        "termo": list(model["coef"]),
+        "estimativa": [round(v, 4) for v in model["coef"].values()],
     }
 )
 Markdown(
-    f"Selected model: **{order_label}** · AICc = {model['aicc']:.1f} · "
+    f"Modelo selecionado: **{order_label}** · AICc = {model['aicc']:.1f} · "
     f"σ² = {model['sigma2']:.2f}"
 )
 ```
@@ -403,11 +417,12 @@ Markdown(
 coefs
 ```
 
-## Residual diagnostics
+## Diagnóstico dos resíduos
 
-The residuals should behave like white noise. In order of priority: no autocorrelation,
-constant variance, and (desirable but not essential) normality. The first `d + D·s`
-residuals come from the differencing start-up period, so they are dropped.
+Os resíduos devem se comportar como ruído branco. Em ordem de prioridade: sem
+autocorrelação, variância constante e (desejável, mas não essencial) normalidade. Os
+primeiros `d + D·s` resíduos vêm do período de inicialização das diferenças e são
+descartados.
 
 ```{python}
 burn_in = d + D * s
@@ -417,11 +432,11 @@ resid_dates = dates[burn_in:]
 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 axes[0, 0].plot(resid_dates, resid, color=BLUE, lw=0.9)
 axes[0, 0].axhline(0, color=GREY, lw=0.8)
-axes[0, 0].set_title("Residuals over time", loc="left")
+axes[0, 0].set_title("Resíduos ao longo do tempo", loc="left")
 
 correlogram(resid, axes[0, 1], "acf")
 axes[0, 1].set_title("")
-axes[0, 1].set_title("Residual ACF", loc="left")
+axes[0, 1].set_title("ACF dos resíduos", loc="left")
 
 sns.histplot(resid, stat="density", color=OKABE_ITO[1], ax=axes[1, 0])
 grid = np.linspace(resid.min(), resid.max(), 200)
@@ -431,21 +446,23 @@ axes[1, 0].plot(
     color=VERMILION,
     label="Normal",
 )
-axes[1, 0].set_title("Distribution vs normal", loc="left")
+axes[1, 0].set_title("Distribuição vs normal", loc="left")
+axes[1, 0].set_ylabel("Densidade")
 axes[1, 0].legend(frameon=False)
 
 stats.probplot(resid, dist="norm", plot=axes[1, 1])
 axes[1, 1].get_lines()[0].set(color=BLUE, markersize=3)
 axes[1, 1].get_lines()[1].set(color=VERMILION)
-axes[1, 1].set_title("")  # drop scipy's default "Probability Plot" title
-axes[1, 1].set_title("Normal Q-Q", loc="left")
+axes[1, 1].set_title("")  # remove o título padrão do scipy ("Probability Plot")
+axes[1, 1].set_title("Q-Q normal", loc="left")
+axes[1, 1].set(xlabel="Quantis teóricos", ylabel="Quantis observados")
 plt.tight_layout()
 plt.show()
 ```
 
-Ljung-Box tests whether the first *h* autocorrelations are jointly zero. **H0 is white noise,
-so a high p-value is the good result.** `model_df = p + q + P + Q` removes the degrees of
-freedom used by the fitted ARMA terms (`aulas/arima.qmd`).
+O Ljung-Box testa se as primeiras *h* autocorrelações são conjuntamente zero. **H0 é ruído
+branco, então um p-valor alto é o resultado bom.** `model_df = p + q + P + Q` desconta os
+graus de liberdade usados pelos termos ARMA estimados (`aulas/arima.qmd`).
 
 ```{python}
 lb = acorr_ljungbox(resid, lags=[12, 24, 36], model_df=p + q + P + Q)
@@ -453,20 +470,20 @@ ljung_box = pl.from_pandas(lb.reset_index(names="lag")).with_columns(
     pl.col("lb_stat").round(2),
     pl.col("lb_pvalue").round(4),
     pl.when(pl.col("lb_pvalue") > 0.05)
-    .then(pl.lit("consistent with white noise"))
-    .otherwise(pl.lit("autocorrelation remains"))
-    .alias("reading (5%)"),
+    .then(pl.lit("compatível com ruído branco"))
+    .otherwise(pl.lit("resta autocorrelação"))
+    .alias("leitura (5%)"),
 )
 jb_stat, jb_p = stats.jarque_bera(resid)
 ljung_box
 ```
 
-## Forecast: 24 months ahead
+## Previsão: 24 meses à frente
 
 ```{python}
 fc = sf.predict(h=HORIZON, level=LEVELS)
 fc_cols = {
-    "mean": "AutoARIMA",
+    "previsão": "AutoARIMA",
     **{
         f"{side}_{lv}": f"AutoARIMA-{side}-{lv}"
         for lv in LEVELS
@@ -476,7 +493,7 @@ fc_cols = {
 
 history = df_sf.filter(pl.col("ds") >= pl.date(last.year - 7, 1, 1))
 fig, ax = plt.subplots(figsize=(11, 5))
-ax.plot(history["ds"], history["y"], color=GREY, lw=1.2, label="History")
+ax.plot(history["ds"], history["y"], color=GREY, lw=1.2, label="Histórico")
 ax.fill_between(
     fc["ds"],
     fc[fc_cols["lo_95"]],
@@ -484,7 +501,7 @@ ax.fill_between(
     color=BLUE,
     alpha=0.15,
     lw=0,
-    label="95% interval",
+    label="Intervalo de 95%",
 )
 ax.fill_between(
     fc["ds"],
@@ -493,93 +510,101 @@ ax.fill_between(
     color=BLUE,
     alpha=0.30,
     lw=0,
-    label="80% interval",
+    label="Intervalo de 80%",
 )
-ax.plot(fc["ds"], fc[fc_cols["mean"]], color=BLUE, lw=2, label="Forecast")
+ax.plot(fc["ds"], fc[fc_cols["previsão"]], color=BLUE, lw=2, label="Previsão")
 ax.axvline(last, color=GREY, lw=0.8, ls=":")
-ax.set(ylabel="Index (2022 = 100)", xlabel=None)
-ax.set_title(f"{order_label}: {HORIZON}-month forecast, {UF}", pad=30)
-# legend in one row above the plot, so it never covers the data
+ax.set(ylabel="Índice (2022 = 100)", xlabel=None)
+ax.set_title(f"{order_label}: previsão de {HORIZON} meses, {UF}", pad=30)
+# legenda em uma linha acima do gráfico, para nunca cobrir os dados
 ax.legend(frameon=False, ncols=4, loc="lower left", bbox_to_anchor=(0, 1.0))
 plt.show()
 ```
 
-The forecast is drawn as a fan chart: two nested bands, with the darker 80% band inside the
-95% band, so the uncertainty reads as part of the forecast instead of an extra line. Only the
-last 7 years of history are shown, so the forecast period is not squeezed into the right edge.
+A previsão é desenhada como um gráfico em leque: duas faixas aninhadas, com a de 80% (mais
+escura) dentro da de 95%, para que a incerteza seja lida como parte da previsão e não como
+uma linha a mais. Só os últimos 7 anos de histórico aparecem, para o período previsto não
+ficar espremido na borda direita.
 
 ```{python}
 forecast_table = fc.select(
-    pl.col("ds").dt.strftime("%Y-%m").alias("month"),
+    pl.col("ds").dt.strftime("%Y-%m").alias("mês"),
     *[pl.col(c).round(1).alias(k) for k, c in fc_cols.items()],
-).with_columns((pl.col("hi_95") - pl.col("lo_95")).round(1).alias("width_95"))
+).with_columns((pl.col("hi_95") - pl.col("lo_95")).round(1).alias("amplitude_95"))
 forecast_table
 ```
 
-## Discussion
+## Discussão
 
-### Evidence to support your answers
+### Evidências para apoiar as respostas
 
-These numbers come straight from the analysis above. The interpretation is yours.
+Estes números saem diretamente da análise acima. A interpretação é minha.
 
 ```{python}
-width = forecast_table["width_95"]
+width = forecast_table["amplitude_95"]
 resid_acf = np.array([np.corrcoef(resid[:-k], resid[k:])[0, 1] for k in (12, 24)])
 band = 1.96 / np.sqrt(len(resid))
+all_acf = np.array([np.corrcoef(resid[:-k], resid[k:])[0, 1] for k in range(1, 37)])
+n_outside = int((np.abs(all_acf) > band).sum())
 lb_pvalues = " / ".join(f"{v:.3f}" for v in lb["lb_pvalue"])
 worst = np.abs(resid).argmax()
+last12_mean = df_sf["y"].tail(12).mean()
+fc12_mean = fc[fc_cols["previsão"]].head(12).mean()
 
 evidence = [
-    f"- **Seasonality / trend (STL):** seasonal strength {seasonal_strength:.2f}, "
-    f"trend strength {trend_strength:.2f}.",
-    f"- **Differences:** `nsdiffs` D = {D_hat}, `ndiffs` d = {d_hat}; "
-    f"AutoARIMA used d = {d}, D = {D}.",
-    f"- **Selected model:** {order_label}, with AR terms p = {p}, P = {P} "
-    f"and MA terms q = {q}, Q = {Q}.",
-    f"- **Ljung-Box p-values** (lags 12/24/36): {lb_pvalues}.",
-    f"- **Residual autocorrelation at seasonal lags:** "
+    f"- **Sazonalidade / tendência (STL):** força sazonal {seasonal_strength:.2f}, "
+    f"força da tendência {trend_strength:.2f}.",
+    f"- **Diferenças:** `nsdiffs` D = {D_hat}, `ndiffs` d = {d_hat}; "
+    f"o AutoARIMA usou d = {d}, D = {D}.",
+    f"- **Modelo selecionado:** {order_label}, com termos AR p = {p}, P = {P} "
+    f"e termos MA q = {q}, Q = {Q}.",
+    f"- **P-valores do Ljung-Box** (lags 12/24/36): {lb_pvalues}.",
+    f"- **Autocorrelação dos resíduos nos lags sazonais:** "
     f"lag 12 = {resid_acf[0]:.2f}, lag 24 = {resid_acf[1]:.2f} "
-    f"(95% band ±{band:.2f}).",
-    f"- **Normality (Jarque-Bera):** p = {jb_p:.3g}; largest absolute residual "
-    f"{abs(resid[worst]):.1f} in {resid_dates[worst]:%b %Y}.",
-    f"- **95% interval width:** {width[0]:.1f} at h = 1, "
-    f"{width[11]:.1f} at h = 12, {width[23]:.1f} at h = 24 points.",
+    f"(banda de 95% ±{band:.2f}); {n_outside} de 36 lags fora da banda "
+    f"(por acaso, espera-se cerca de 2).",
+    f"- **Normalidade (Jarque-Bera):** p = {jb_p:.3g}; maior resíduo em módulo "
+    f"{abs(resid[worst]):.1f} em {month_pt(resid_dates[worst])}.",
+    f"- **Nível:** média dos últimos 12 meses observados {last12_mean:.1f}; "
+    f"média dos 12 primeiros meses previstos {fc12_mean:.1f}.",
+    f"- **Amplitude do intervalo de 95%:** {width[0]:.1f} em h = 1, "
+    f"{width[11]:.1f} em h = 12, {width[23]:.1f} em h = 24 pontos.",
 ]
 Markdown("\n".join(evidence))
 ```
 
-### Answers
+### Respostas
 
-*Write 4 to 5 lines for each question.*
+*Escrever de 4 a 5 linhas para cada pergunta.*
 
-1. **Did the ACF/PACF of the original series suggest seasonality? And trend? Does that match
-   what you saw in the line chart?**
+1. **O ACF/PACF da série original sugeriu sazonalidade? E tendência? Bate com o que você viu
+   no gráfico de linha?**
 
-   *Your answer here.*
+   *Sua resposta aqui.*
 
-2. **How many differences (regular and seasonal) did AutoARIMA apply? And the AR/MA
-   components? Could you see this in the ACF/PACF?**
+2. **Quantas diferenças (regular e sazonal) o AutoARIMA aplicou? E os componentes AR/MA?
+   Conseguiu observar isso no ACF/PACF?**
 
-   *Your answer here.*
+   *Sua resposta aqui.*
 
-3. **Do the residuals look like white noise? Is any seasonal pattern left?**
+3. **Os resíduos parecem white noise? Algum padrão remanescente sazonal?**
 
-   *Your answer here.*
+   *Sua resposta aqui.*
 
-4. **Did the forecast look reasonable visually (does it capture the seasonality, stay
-   anchored to the history, do the intervals widen a lot with the horizon)?**
+4. **A previsão pareceu razoável visualmente (captura a sazonalidade, fica bem ancorada no
+   histórico, intervalos abrem muito com o horizonte)?**
 
-   *Your answer here.*
+   *Sua resposta aqui.*
 
-5. **Which other states do you think would give a very different SARIMA from yours, and why?
-   Think of states in different regions, with different economic profiles.**
+5. **Que outras UFs você imagina que dariam um SARIMA bem diferente do seu (e por quê)? Pense
+   em estados de regiões diferentes, com perfil econômico distinto.**
 
-   *Your answer here.*
+   *Sua resposta aqui.*
 
 ::: {.callout-tip collapse="true"}
-## Check your intuition for question 5 (open after answering)
+## Confira sua intuição para a pergunta 5 (abrir depois de responder)
 
-The same `AutoARIMA(season_length=12)` fitted to every state.
+O mesmo `AutoARIMA(season_length=12)` ajustado para todas as UFs.
 
 ```{python}
 all_ufs = pmc.select(
@@ -596,12 +621,11 @@ for uid, fitted in zip(sf_all.uids, sf_all.fitted_[:, 0], strict=True):
     rows.append(
         {
             "UF": uid,
-            "model": f"({p_},{d_},{q_})({P_},{D_},{Q_})[{s_}]",
+            "modelo": f"({p_},{d_},{q_})({P_},{D_},{Q_})[{s_}]",
             "AICc": round(fitted.model_["aicc"], 1),
         }
     )
-pl.DataFrame(rows).with_columns((pl.col("UF") == UF).alias("yours"))
+pl.DataFrame(rows).with_columns((pl.col("UF") == UF).alias("minha UF"))
 ```
 
 :::
-
