@@ -158,7 +158,8 @@ df_sf.head()
 ```
 
 Antes de modelar, uma checagem de qualidade dos dados: um mês faltando ou duplicado
-deslocaria silenciosamente todos os lags sazonais, então é melhor o relatório falhar aqui.
+deslocaria silenciosamente todos os lags sazonais, por isso a série é validada antes da
+modelagem.
 
 ```{python}
 class MonthlySeries(pa.DataFrameModel):
@@ -579,10 +580,8 @@ ax.legend(frameon=False, ncols=4, loc="lower left", bbox_to_anchor=(0, 1.0))
 plt.show()
 ```
 
-A previsão é desenhada como um gráfico em leque: duas faixas aninhadas, com a de 80% (mais
-escura) dentro da de 95%, para que a incerteza seja lida como parte da previsão e não como
-uma linha a mais. Só os últimos 7 anos de histórico aparecem, para o período previsto não
-ficar espremido na borda direita.
+As faixas mostram os intervalos de 80% (mais escura) e de 95%. O gráfico exibe os últimos 7
+anos de histórico.
 
 ```{python}
 forecast_table = fc.select(
@@ -594,9 +593,7 @@ forecast_table
 
 ## Discussão
 
-### Evidências para apoiar as respostas
-
-Estes números saem diretamente da análise acima. A interpretação é minha.
+### Resumo dos resultados
 
 ```{python}
 width = forecast_table["amplitude_95"]
@@ -620,7 +617,7 @@ evidence = [
     f"- **Autocorrelação dos resíduos nos lags sazonais:** "
     f"lag 12 = {resid_acf[0]:.2f}, lag 24 = {resid_acf[1]:.2f} "
     f"(banda de 95% ±{band:.2f}); {n_outside} de 36 lags fora da banda "
-    f"(por acaso, espera-se cerca de 2).",
+    f"(ao acaso, seriam esperados cerca de 2).",
     f"- **Normalidade (Jarque-Bera):** p = {jb_p:.3g}; maior resíduo em módulo "
     f"{abs(resid[worst]):.1f} em {month_pt(resid_dates[worst])}.",
     f"- **Nível:** média dos últimos 12 meses observados {last12_mean:.1f}; "
@@ -677,65 +674,51 @@ pl.DataFrame(rows).sort("pico de dez.", descending=True).with_columns(
 1. **O ACF/PACF da série original sugeriu sazonalidade? E tendência? Bate com o que você viu
    no gráfico de linha?**
 
-   Sim, as duas coisas. A ACF decai muito lentamente (0,89 no lag 1 e ainda cerca de 0,45 no
-   lag 36), a assinatura de uma série não estacionária, com tendência; a PACF, com um pico
-   dominante no lag 1 (0,89), reforça a raiz unitária. Sobre esse decaimento aparecem picos
-   nos lags 12 e 24 (0,83 e 0,64, acima dos vizinhos), e a PACF tem picos fortes nos lags 12
-   e 13: sazonalidade anual. Isso bate com o gráfico de linha, em que o índice quase dobra
-   entre 2004 e 2013 (de cerca de 52 para 96), recua na recessão de 2015–2016 e retoma
-   depois, com pico todo dezembro e vale em fevereiro (+14 e −10 pontos em relação à
-   tendência). A STL confirma: força da tendência 0,98 e sazonal 0,82.
+   Sim. A ACF decai muito lentamente (0,89 no lag 1 e ainda 0,45 no lag 36), sinal de
+   tendência e de série não estacionária, e tem picos nos lags 12 e 24 (0,83 e 0,64) acima dos
+   vizinhos, sinal de sazonalidade anual, reforçada pelos picos da PACF nos lags 12 e 13. Isso
+   bate com o gráfico de linha: o índice quase dobra entre 2004 e 2013, recua na recessão de
+   2015 e 2016 e volta a crescer, com pico todo dezembro (+14 pontos sobre a tendência) e vale
+   em fevereiro (−10). A STL confirma: força da tendência 0,98 e da sazonalidade 0,82.
 
 2. **Quantas diferenças (regular e sazonal) o AutoARIMA aplicou? E os componentes AR/MA?
    Conseguiu observar isso no ACF/PACF?**
 
-   Uma de cada (d = 1, D = 1), coerente com os testes: na série original o ADF não rejeita e o
-   KPSS rejeita; após Δ₁₂ o resultado fica inconclusivo e a ACF ainda decai devagar até perto
-   do lag 23; só em ΔΔ₁₂ os dois testes concordam em estacionariedade, como indicam também
-   `nsdiffs` e `ndiffs`. Na ΔΔ₁₂, os picos negativos nos lags 1 (−0,39) e 12 (−0,37) sugerem,
-   pela leitura manual, o modelo airline SARIMA(0,1,1)(0,1,1)₁₂. O AutoARIMA escolheu um
-   modelo mais rico, SARIMA(3,1,2)(1,1,1)₁₂, que capta também a estrutura dos lags 2 a 4
-   (PACF significativa em 1 e 2, ACF em 3 e 4), menos óbvia no gráfico. A comparação justifica
-   a complexidade: o airline tem AICc 13 pontos pior (evidência decisiva) e deixa resíduos
-   autocorrelacionados (Ljung-Box p < 0,001). O MA sazonal de −0,88, próximo de −1, sugere uma
-   sazonalidade quase determinística.
+   Uma de cada tipo (d = 1, D = 1). A Δ₁₂ ainda tem ACF de decaimento lento e testes
+   inconclusivos, e só a ΔΔ₁₂ é estacionária pelo ADF e pelo KPSS, o mesmo resultado de
+   `nsdiffs` e `ndiffs`. Na ΔΔ₁₂, os picos negativos da ACF nos lags 1 (−0,39) e 12 (−0,37)
+   sugerem o modelo airline, SARIMA(0,1,1)(0,1,1)₁₂, mas o AutoARIMA escolheu
+   SARIMA(3,1,2)(1,1,1)₁₂, que capta também a estrutura dos lags 2 a 4, menos visível no
+   gráfico. A escolha se justifica: o airline tem AICc 13 pontos pior e deixa resíduos
+   autocorrelacionados (Ljung-Box p < 0,001).
 
 3. **Os resíduos parecem white noise? Algum padrão remanescente sazonal?**
 
-   Quase, mas não totalmente. Nenhum dos 36 lags da ACF dos resíduos sai da banda de ±0,12, e
-   os lags sazonais 12 e 24 são pequenos (0,03 e −0,07): não resta padrão sazonal. Ainda assim
-   o Ljung-Box rejeita ruído branco nos lags 12 e 24 (p = 0,035 e 0,040), porque testa a soma
-   de muitas autocorrelações pequenas. A análise de sensibilidade mostra a causa principal:
-   com dummies para março a junho de 2020, os p-valores sobem para 0,31, 0,07 e 0,13, e o
-   efeito estimado de abril é de cerca de −21 pontos. Ou seja, o problema é o choque da
-   pandemia, não a estrutura do modelo. A normalidade é rejeitada (caudas pesadas), o que
-   afeta os intervalos de previsão, não a previsão pontual.
+   Quase. Nenhum dos 36 lags da ACF dos resíduos sai da banda de ±0,12, e os lags 12 e 24 são
+   pequenos (0,03 e −0,07), então não resta padrão sazonal. Ainda assim, o Ljung-Box, que
+   testa as autocorrelações em conjunto, rejeita ruído branco nos lags 12 e 24 (p = 0,035 e
+   0,040). Com dummies para março a junho de 2020 (abril em torno de −21 pontos), os p-valores
+   sobem para 0,31, 0,07 e 0,13: a rejeição vem principalmente do choque da pandemia. Os
+   resíduos têm caudas pesadas, o que afeta os intervalos de previsão, não a previsão pontual.
 
 4. **A previsão pareceu razoável visualmente (captura a sazonalidade, fica bem ancorada no
    histórico, intervalos abrem muito com o horizonte)?**
 
-   Sim, com ressalvas. A previsão reproduz a sazonalidade (picos de dezembro em cerca de 121 e
-   123, vales em fevereiro) e começa ancorada no histórico: a média dos 12 primeiros meses
-   previstos (106,8) fica perto da média dos últimos 12 observados (104,1). Mas ela projeta
-   crescimento contínuo só por inércia: o modelo não conhece juros, crédito ou renda. Os
-   intervalos de 95% abrem de 13 para 32 pontos em 24 meses, o esperado com d = 1 e D = 1,
-   em que a incerteza se acumula; no segundo ano a amplitude já supera a própria oscilação
-   sazonal (cerca de 24 pontos entre fevereiro e dezembro). Com resíduos de caudas pesadas,
-   esses intervalos tendem a ser otimistas; o próximo passo seria validar fora da amostra
-   (MASE contra o SeasonalNaive).
+   Em boa parte, sim. A previsão repete a sazonalidade (picos de dezembro perto de 121 e 123,
+   vales em fevereiro) e parte do nível recente: a média dos 12 primeiros meses previstos
+   (106,8) fica perto da dos últimos 12 observados (104,1). O crescimento projetado, porém, é
+   só inércia, já que o modelo não considera juros, crédito ou renda. O intervalo de 95% abre
+   de 13 para 32 pontos em 24 meses, como esperado com d = 1 e D = 1, e no fim do horizonte já
+   supera a oscilação sazonal (cerca de 24 pontos); com caudas pesadas, deve estar otimista.
 
 5. **Que outras UFs você imagina que dariam um SARIMA bem diferente do seu (e por quê)? Pense
    em estados de regiões diferentes, com perfil econômico distinto.**
 
-   A tabela por UF mostra que o mês do pico não muda: as 27 UFs têm pico em dezembro e vale
-   em fevereiro. O que muda é a intensidade e a dinâmica. Rio de Janeiro (+24), Bahia (+22),
-   Alagoas e Rio Grande do Norte (+21) têm o pico de Natal mais forte; Tocantins (+8),
-   Roraima (+9), Mato Grosso (+10) e Goiás (+12) têm o mais fraco. Minha hipótese é que, no
-   Centro-Norte, a renda do agronegócio e do setor público se distribui melhor ao longo do
-   ano, enquanto no litoral o 13º salário e o turismo de verão concentram o consumo em
-   dezembro. Na tendência, as 7 UFs que ficaram com d = 0 (entre elas Tocantins, Roraima e Mato
-   Grosso) cresceram mais em média (3,4× contra 2,6× desde 2004), já que a diferença sazonal
-   absorve uma tendência regular; mas não é regra: o Acre cresceu 5× e manteve d = 1. Já
-   economias pequenas e concentradas, como o Amapá (o maior σ dos resíduos, 6,2), geram
-   modelos mais instáveis. Minas, diversificada, fica no meio: pico moderado (+14) e um dos
-   menores ruídos (σ = 3,4).
+   Pela tabela por UF, o mês do pico é o mesmo nas 27 (dezembro, com vale em fevereiro); muda a
+   intensidade e a dinâmica. RJ (+24), BA (+22), AL e RN (+21) têm o pico de Natal mais forte,
+   e TO (+8), RR (+9), MT (+10) e GO (+12), o mais fraco. Minha hipótese é que a renda do
+   agronegócio e do setor público se distribui melhor ao longo do ano, enquanto o 13º salário
+   e o turismo de verão concentram o consumo do litoral em dezembro. Estados de crescimento
+   forte, como TO e RR, tendem a ficar com d = 0 (as 7 UFs com d = 0 cresceram 3,4× contra
+   2,6× das demais), embora não seja regra, e economias pequenas como o Amapá têm mais ruído
+   (σ = 6,2) e ajuste pior. Minas fica no meio: pico moderado (+14) e pouco ruído (σ = 3,4).
